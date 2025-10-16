@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Color Match Makeup Finder</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for a dark, professional aesthetic */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a1a1a;
+            color: #f0f0f0;
+        }
+        .container {
+            max-width: 1000px;
+            margin: auto;
+        }
+        #video-feed, #color-picker-canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* Ensures video fills container */
+            border-radius: 0.5rem;
+        }
+        #video-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9; /* Standard video aspect ratio */
+            max-height: 60vh;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            overflow: hidden;
+        }
+        #color-picker-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 10;
+            /* Initially transparent, used only for image snapshot and sampling */
+            opacity: 0;
+        }
+        #color-display {
+            width: 100%;
+            height: 50px;
+            border-radius: 0.5rem;
+            transition: background-color 0.3s ease;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
+        }
+        .glass-card {
+            background: rgba(40, 40, 40, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(60, 60, 60, 0.5);
+        }
+
+        /* Face Guide Oval */
+        #face-guide {
+            position: absolute;
+            top: 10%;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 70%; /* Width of the oval */
+            height: 80%; /* Height of the oval */
+            border: 4px solid #ff69b4; /* Primary color border */
+            border-radius: 50%; /* Oval shape */
+            box-shadow: 0 0 0 1000px rgba(0, 0, 0, 0.5); /* Semi-transparent blackout around the oval */
+            pointer-events: none; /* Allows clicks to pass through to the video container */
+            z-index: 20;
+            opacity: 0.9;
+            transition: opacity 0.3s;
+        }
+        
+        /* Utility styles for the result lists */
+        .result-group {
+            border-left: 4px solid #ff69b4;
+            padding-left: 1rem;
+        }
+        .result-group h4 {
+            font-weight: bold;
+            color: #fff;
+            margin-bottom: 0.5rem;
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary': '#ff69b4', /* Hot Pink/Magenta for beauty theme */
+                        'secondary': '#a9a9a9',
+                        'dark-bg': '#1a1a1a',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="p-4 md:p-8">
+    <div class="container min-h-screen flex flex-col items-center">
+        <h1 class="text-4xl font-extrabold mb-2 text-primary">ShadeMatch Live</h1>
+        <p class="text-secondary mb-8 text-center">Position your face in the oval guide and tap 'Capture and Match'.</p>
+
+        <!-- Main Card Container -->
+        <div class="glass-card p-6 md:p-8 rounded-xl w-full">
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <!-- Column 1: Camera Feed / Image & Color Info -->
+                <div class="flex flex-col items-center space-y-4">
+                    <div id="video-container" class="relative w-full flex justify-center items-center rounded-xl overflow-hidden">
+                        <!-- Live Video Feed (Default) -->
+                        <video id="video-feed" autoplay playsinline muted class="object-cover"></video>
+                        <!-- Face Guide Oval -->
+                        <div id="face-guide"></div>
+                        <!-- Hidden Canvas for color picking -->
+                        <canvas id="color-picker-canvas"></canvas>
+                        <div id="camera-status" class="absolute text-white bg-black/50 p-2 rounded-lg text-sm">
+                            Loading camera...
+                        </div>
+                    </div>
+
+                    <!-- File Upload Option (Below Camera Feed) -->
+                    <div class="w-full">
+                        <label for="image-upload" class="block text-lg font-medium mb-2 text-white">OR Load Static Image</label>
+                        <input type="file" id="image-upload" accept="image/*" class="w-full text-sm text-secondary
+                            file:mr-4 file:py-2 file:px-4
+                            file:rounded-full file:border-0
+                            file:text-sm file:font-semibold
+                            file:bg-secondary/20 file:text-secondary
+                            hover:file:bg-secondary/30" onchange="handleImageUpload(event)">
+                    </div>
+
+                    <div id="color-info" class="w-full space-y-4 pt-4">
+                        <label class="block text-lg font-medium text-white">2. Selected Color</label>
+                        <div id="color-display" class="w-full rounded-lg" style="background-color: #333;"></div>
+                        <div class="text-center text-xl font-mono p-2 rounded-lg bg-gray-800 border border-gray-700">
+                            HEX: <span id="hex-code" class="text-primary font-bold">#N/A</span>
+                        </div>
+                        <p id="family-display" class="text-center text-secondary font-medium"></p>
+                        <button id="capture-match-button" onclick="captureAndMatch()"
+                            class="w-full py-3 px-4 rounded-lg text-white font-bold transition duration-300
+                            bg-primary hover:bg-primary/80 disabled:bg-gray-600 disabled:cursor-not-allowed flex items-center justify-center">
+                            <svg id="capture-icon" class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.863-1.428A1 1 0 0110.273 4h3.454a1 1 0 01.894.552l.864 1.428a2 2 0 001.664.89h.93a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                            <svg id="loading-spinner" class="animate-spin -ml-1 mr-3 h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            3. Capture and Match
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Column 2: Results -->
+                <div class="flex flex-col space-y-4">
+                    <label class="block text-lg font-medium text-white">4. Makeup Matches (From Your Doc)</label>
+                    <div id="results" class="space-y-4 p-4 glass-card rounded-xl h-full min-h-[300px] custom-scroll overflow-y-auto">
+                        <p class="text-secondary text-center">Press the 'Capture and Match' button once your face is aligned.</p>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+        <footer class="mt-8 text-xs text-gray-500">
+            Product data loaded from your Google Doc database.
+        </footer>
+    </div>
+
+    <script>
+        // --- Core Variables ---
+        const video = document.getElementById('video-feed');
+        const canvas = document.getElementById('color-picker-canvas');
+        const ctx = canvas.getContext('2d');
+        const colorDisplay = document.getElementById('color-display');
+        const hexCodeEl = document.getElementById('hex-code');
+        const resultsEl = document.getElementById('results');
+        const familyDisplayEl = document.getElementById('family-display');
+        const captureMatchButton = document.getElementById('capture-match-button');
+        const cameraStatusEl = document.getElementById('camera-status');
+        const videoContainer = document.getElementById('video-container');
+        const imageUpload = document.getElementById('image-upload');
+        const captureIcon = document.getElementById('capture-icon');
+        const loadingSpinner = document.getElementById('loading-spinner');
+
+        let currentHex = '';
+        let stream = null;
+        let isImageMode = false;
+
+        // --- Static Database (From Google Doc) ---
+        // Extracted data from the user's Google Doc, simplified for lookup by color family
+        const productDatabase = [
+            {
+                family: 'Fair Cool',
+                minHex: 0xF3E0D8, // #F3E0D8
+                maxHex: 0xF8EBE6, // #F8EBE6
+                foundation: [
+                    { name: 'Maybelline Fit Me: Shade 102 Fair Ivory', url: 'https://www.amazon.com/Maybelline-Poreless-Foundation-Porcelain-Oil-Free/dp/B06XDY29X7' },
+                    { name: 'Estee Lauder Double Wear: Shade 1C0 Shell', url: 'https://www.amazon.com/Est%C3%A9e-Lauder-24-Hour-Long-Wear-Foundation/dp/B00JLK1GVC' }
+                ],
+                concealer: [
+                    { name: 'Match: Maybelline Age Rewind: Shade Ivory', url: 'https://www.amazon.com/Maybelline-Multi-Use-Concealer-Crease-Resistant-Moisturizing/dp/B0DN24B7WB' },
+                    { name: 'Brighten: Tarte Shape Tape: 16N Fair-Light Neutral', url: 'https://www.amazon.com/tarte-shape-tape-full-coverage-concealer/dp/B077Z67G64' }
+                ],
+                corrector: { name: 'e.l.f. Tone Adjusting Primer: Green or Pink', rationale: 'Green corrects redness; Pink/Lavender brightens dullness.' }
+            },
+            {
+                family: 'Light Neutral',
+                minHex: 0xD0A98F, // #D0A98F (Lower end of Light Warm)
+                maxHex: 0xEAC6A7, // #EAC6A7
+                foundation: [
+                    { name: "L'Oréal True Match: Shade N3 Nude Beige", url: 'https://www.amazon.com/LOreal-Paris-Super-Blendable-Foundation-Coverage/dp/B0BCGZMTSY' },
+                    { name: 'NARS: Shade Mont Blanc', url: 'https://www.amazon.com/NARS-Light-Reflecting-Foundation-Makeup-Skincare/dp/B0B9T5CDQJ' }
+                ],
+                concealer: [
+                    { name: 'Match: Maybelline Age Rewind: Shade Ivory', url: 'https://www.amazon.com/Maybelline-Multi-Use-Concealer-Crease-Resistant-Moisturizing/dp/B0DN24B7WB' },
+                    { name: 'Brighten: Tarte Shape Tape: 16N Fair-Light Neutral', url: 'https://www.amazon.com/tarte-shape-tape-full-coverage-concealer/dp/B077Z67G64' }
+                ],
+                corrector: { name: 'e.l.f. Tone Adjusting Primer: Green or Pink', rationale: 'Green corrects redness; Pink/Lavender brightens dullness.' }
+            },
+            {
+                family: 'Light Warm',
+                minHex: 0xC7A88C, // #C7A88C
+                maxHex: 0xD4B39A, // #D4B39A
+                foundation: [
+                    { name: 'Revlon ColorStay: Shade 240 Medium Beige', url: 'https://www.amazon.com/Revlon-Colorstay-Foundation-Medium-Beige/dp/B01MU7K82M' },
+                    { name: 'Fenty Beauty: Shade 185', url: 'https://www.amazon.com/Fenty-Beauty-Filtr-Longwear-Foundation/dp/B081282Q1L' }
+                ],
+                concealer: [
+                    // URL placeholders based on doc, assuming Amazon links
+                    { name: 'Match: NARS Radiant Creamy: Shade Custard', url: 'https://www.amazon.com/s?k=NARS+Radiant+Creamy+Concealer+Custard' },
+                    { name: 'Brighten: NYX Bare With Me: Shade Vanilla', url: 'https://www.amazon.com/s?k=NYX+Bare+With+Me+Concealer+Vanilla' }
+                ],
+                corrector: { name: 'Peach Corrector: Peach/Apricot Shade', rationale: 'Peach/Apricot is opposite blue/purple on the color wheel.' }
+            },
+            {
+                family: 'Medium Neutral',
+                minHex: 0xA57B61, // #A57B61
+                maxHex: 0xB28F72, // #B28F72
+                foundation: [
+                    { name: 'Maybelline Super Stay: Shade 128 Warm Nude', url: 'https://www.amazon.com/Maybelline-Dewy-Smooth-Foundation-Makeup/dp/B07BVVCQXB' },
+                    { name: 'Hourglass Veil: Shade Medium', url: 'https://www.amazon.com/Hourglass-Ambient-Soft-Foundation-Shade/dp/B0BM5561XF' }
+                ],
+                concealer: [
+                    // URL placeholders based on doc, assuming Amazon links
+                    { name: 'Match: NARS Radiant Creamy: Shade Custard', url: 'https://www.amazon.com/s?k=NARS+Radiant+Creamy+Concealer+Custard' },
+                    { name: 'Brighten: NYX Bare With Me: Shade Vanilla', url: 'https://www.amazon.com/s?k=NYX+Bare+With+Me+Concealer+Vanilla' }
+                ],
+                corrector: { name: 'Peach Corrector: Peach/Apricot Shade', rationale: 'Peach/Apricot is opposite blue/purple on the color wheel.' }
+            },
+            {
+                family: 'Medium Deep Warm',
+                minHex: 0x6E4D3C, // #6E4D3C
+                maxHex: 0x8F654F, // #8F654F
+                foundation: [
+                    { name: 'Fenty Beauty: Shade 300', url: 'https://www.amazon.com/FENTY-BEAUTY-Filtr-Longwear-Foundation/dp/B07665RMG9' },
+                    { name: 'MAC Studio Fix: Shade NC45', url: 'https://www.amazon.com/Studio-Fix-Fluid-SPF15-Foundation/dp/B0C5K45NXZ' }
+                ],
+                concealer: [
+                    // URL placeholders based on doc, assuming Amazon links
+                    { name: 'Match: L.A. Girl Pro Conceal: Shade Toffee', url: 'https://www.amazon.com/s?k=L.A.+Girl+Pro+Conceal+Toffee' },
+                    { name: "Brighten: Fenty Beauty Pro Filt'r: Shade 310", url: 'https://www.amazon.com/s?k=Fenty+Beauty+Pro+Filtr+Concealer+310' }
+                ],
+                corrector: { name: 'Orange/Red Corrector: Burnt Orange Shade', rationale: 'Orange or Red neutralizes deep blue/grey hyperpigmentation.' }
+            },
+            {
+                family: 'Deep Cool',
+                minHex: 0x3B221A, // #3B221A
+                maxHex: 0x5C392A, // #5C392A
+                foundation: [
+                    { name: 'Black Opal True Color: Shade Hazelnut', url: 'https://www.amazon.com/Black-Opal-Perfecting-Liquid-Foundation/dp/B07NZXC3FM' },
+                    { name: 'Lancôme Teint Idole: Shade 510 Suede C', url: 'https://www.amazon.com/Lanc%C3%B4me-Foundation-Coverage-Oil-Free-Natural/dp/B072N26J94' }
+                ],
+                concealer: [
+                    // URL placeholders based on doc, assuming Amazon links
+                    { name: 'Match: L.A. Girl Pro Conceal: Shade Toffee', url: 'https://www.amazon.com/s?k=L.A.+Girl+Pro+Conceal+Toffee' },
+                    { name: "Brighten: Fenty Beauty Pro Filt'r: Shade 310", url: 'https://www.amazon.com/s?k=Fenty+Beauty+Pro+Filtr+Concealer+310' }
+                ],
+                corrector: { name: 'Orange/Red Corrector: Burnt Orange Shade', rationale: 'Orange or Red neutralizes deep blue/grey hyperpigmentation.' }
+            }
+        ];
+
+        // --- Utility Functions ---
+
+        /** Converts RGB values to a Hex color string. */
+        function rgbToHex(r, g, b) {
+            return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+        }
+
+        /** Converts Hex string (e.g., #FFFFFF) to a number for comparison. */
+        function hexToDecimal(hex) {
+            return parseInt(hex.slice(1), 16);
+        }
+
+        /** Determines the color family from the selected HEX code using the database ranges. */
+        function hexToFamily(hex) {
+            if (!hex || hex === '#N/A') return null;
+
+            // Convert the user's hex to a single number
+            const userDec = hexToDecimal(hex);
+
+            // Iterate through the predefined ranges
+            for (const item of productDatabase) {
+                // Determine if the user's color is within the range [minHex, maxHex]
+                // Note: The ranges are approximate skin tones and are compared numerically.
+                const min = Math.min(item.minHex, item.maxHex);
+                const max = Math.max(item.minHex, item.maxHex);
+
+                if (userDec >= min && userDec <= max) {
+                    return item; // Found a match, return the whole family object
+                }
+            }
+
+            // If no exact match, try to find the numerically closest family (best guess)
+            let closestMatch = null;
+            let minDiff = Infinity;
+
+            for (const item of productDatabase) {
+                const midPoint = (item.minHex + item.maxHex) / 2;
+                const diff = Math.abs(userDec - midPoint);
+
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    closestMatch = item;
+                }
+            }
+
+            // Fallback to the closest family if an exact range is missed (which is likely with natural skin tones)
+            return closestMatch;
+        }
+
+        /** Draws the video feed or static image to the hidden canvas and picks the color from the center. */
+        function captureAndMatch() {
+            const source = isImageMode ? document.querySelector('img') : video;
+
+            if (!source || (source.tagName === 'VIDEO' && source.paused && !isImageMode)) {
+                 resultsEl.innerHTML = '<p class="text-red-400 text-center">Camera not ready or access denied. Please allow access or load an image.</p>';
+                return;
+            }
+
+            // Set loading state
+            captureMatchButton.disabled = true;
+            captureIcon.classList.add('hidden');
+            loadingSpinner.classList.remove('hidden');
+            resultsEl.innerHTML = `<p class="text-primary text-center animate-pulse">Capturing color and matching products...</p>`;
+
+            // Set canvas size to match the source element's current dimensions
+            canvas.width = source.naturalWidth || source.videoWidth;
+            canvas.height = source.naturalHeight || source.videoHeight;
+
+            // Draw the source (video or image) onto the canvas
+            ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+
+            // --- Color Sampling from the Center of the Oval Guide ---
+            // The oval is centered. We sample the center of the source feed.
+            const pixelX = Math.floor(canvas.width / 2);
+            const pixelY = Math.floor(canvas.height / 2);
+
+            // Read pixel data
+            const imageData = ctx.getImageData(pixelX, pixelY, 1, 1).data;
+            const [r, g, b] = [imageData[0], imageData[1], imageData[2]];
+
+            updateColorDisplay(r, g, b);
+
+            // Run the match lookup
+            searchMakeup();
+        }
+
+        /** Updates the UI with the new color. */
+        function updateColorDisplay(r, g, b) {
+            currentHex = rgbToHex(r, g, b);
+            colorDisplay.style.backgroundColor = currentHex;
+            hexCodeEl.textContent = currentHex;
+        }
+
+        /** Handles image file selection and replaces video with static image. */
+        function handleImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            isImageMode = true;
+
+            // Stop the camera stream if active
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+                video.style.display = 'none'; // Hide video
+                videoContainer.classList.remove('aspect-video');
+                // Remove existing image if present
+                const existingImg = videoContainer.querySelector('img');
+                if (existingImg) existingImg.remove();
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.id = 'static-image';
+                img.onload = () => {
+                    // Styles to make the image fit nicely in the container
+                    img.style.maxWidth = '100%';
+                    img.style.height = '100%';
+                    img.style.objectFit = 'contain';
+                    img.style.borderRadius = '0.5rem';
+                    img.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.4)';
+                    videoContainer.appendChild(img);
+                };
+                img.src = e.target.result;
+                resultsEl.innerHTML = '<p class="text-secondary text-center">Image loaded. Press \'Capture and Match\' to sample the center color.</p>';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // --- Camera Setup ---
+
+        async function startCamera() {
+            cameraStatusEl.textContent = 'Requesting camera access...';
+            try {
+                // Request camera stream (environment-facing if available, otherwise any)
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'user' } // Using 'user' (front camera) is more common for face apps
+                });
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    video.play();
+                    cameraStatusEl.textContent = 'Ready for face alignment.';
+                };
+            } catch (err) {
+                console.error("Error accessing camera: ", err);
+                cameraStatusEl.innerHTML = 'Camera access denied or failed. Please allow access or <label for="image-upload" class="text-primary cursor-pointer">load a static image</label>.';
+            }
+        }
+
+        /** Main search logic: Use the static database derived from the Google Doc. */
+        function searchMakeup() {
+            const match = hexToFamily(currentHex);
+
+            if (!match) {
+                familyDisplayEl.textContent = 'No Color Family Match Found.';
+                resultsEl.innerHTML = '<p class="text-red-400 text-center">Could not determine a matching Color Family from your database ranges.</p>';
+                return;
+            }
+
+            familyDisplayEl.textContent = `Matched to Color Family: ${match.family}`;
+
+            let html = `
+                <h3 class="text-xl font-bold mb-4 text-primary">${match.family} - Your Full Kit</h3>
+                <p class="text-sm text-secondary mb-4">Recommendations generated from your private database.</p>
+                <div class="space-y-6">
+
+                    <!-- Foundation Matches -->
+                    <div class="result-group">
+                        <h4 class="text-lg">Foundation Match (Base Color)</h4>
+                        ${match.foundation.map(p => `
+                            <div class="p-3 bg-gray-700/50 rounded-lg mb-2">
+                                <p class="font-semibold text-white">${p.name}</p>
+                                <a href="${p.url}" target="_blank" class="text-primary hover:text-white/80 hover:underline break-all text-sm block font-mono">
+                                    [Buy/View on Amazon]
+                                </a>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <!-- Concealer Matches -->
+                    <div class="result-group">
+                        <h4 class="text-lg">Concealer Matches (Match & Brighten)</h4>
+                        ${match.concealer.map(p => `
+                            <div class="p-3 bg-gray-700/50 rounded-lg mb-2">
+                                <p class="font-semibold text-white">${p.name}</p>
+                                <a href="${p.url}" target="_blank" class="text-primary hover:text-white/80 hover:underline break-all text-sm block font-mono">
+                                    [Buy/View on Amazon]
+                                </a>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <!-- Corrector/Primer -->
+                    <div class="result-group">
+                        <h4 class="text-lg">Color Corrector / Primer</h4>
+                        <div class="p-3 bg-gray-700/50 rounded-lg">
+                            <p class="font-semibold text-white">${match.corrector.name}</p>
+                            <p class="text-xs text-secondary mt-1">${match.corrector.rationale}</p>
+                            <!-- Note: The doc did not provide links for these, only AS-Link placeholders, so we use a generic Amazon search if a link wasn't specified. -->
+                            <a href="https://www.amazon.com/s?k=${encodeURIComponent(match.corrector.name)}" target="_blank" class="text-primary hover:text-white/80 hover:underline break-all text-sm block font-mono mt-2">
+                                [Search on Amazon]
+                            </a>
+                        </div>
+                    </div>
+
+                </div>
+            `;
+
+            resultsEl.innerHTML = html;
+
+            // Reset loading state
+            captureMatchButton.disabled = false;
+            captureIcon.classList.remove('hidden');
+            loadingSpinner.classList.add('hidden');
+        }
+
+
+        // --- Initialization ---
+
+        window.onload = () => {
+             // Start camera immediately on load
+            startCamera();
+
+            // Setup Capture button listener
+            captureMatchButton.addEventListener('click', captureAndMatch);
+        };
+    </script>
+</body>
+</html>
